@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS equipment (
 );
 
 CREATE TABLE IF NOT EXISTS recipe_ingredients (
-    recipe_id bigint NOT NULL REFERENCES recipes(id),
+    recipe_id bigint NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
     ingredient_id bigint NOT NULL REFERENCES ingredients(id),
     quantity text NOT NULL,
     unit text NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients (
 );
 
 CREATE TABLE IF NOT EXISTS recipe_equipment (
-    recipe_id bigint NOT NULL REFERENCES recipes(id),
+    recipe_id bigint NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
     equipment_id bigint NOT NULL REFERENCES equipment(id),
     PRIMARY KEY (recipe_id, equipment_id)
 );
@@ -72,7 +72,7 @@ CREATE TABLE tags (
 );
 
 CREATE TABLE recipe_tags (
-    recipe_id INT REFERENCES recipes(id),
+    recipe_id INT REFERENCES recipes(id) ON DELETE CASCADE,
     tag_id INT REFERENCES tags(id),
     PRIMARY KEY (recipe_id, tag_id)
 );

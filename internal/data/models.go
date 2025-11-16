@@ -5,10 +5,10 @@ import (
 	"errors"
 )
 
-// Define a custom ErrRecordNotFound error. We'll return this from our Get() method when
-// looking up a recipe that doesn't exist in our database.
+// Define custom errors for our data models.
 var (
 	ErrRecordNotFound = errors.New("record not found")
+	ErrEditConflict   = errors.New("edit conflict")
 )
 
 // Create a Models struct which wraps the RecipeModel. We'll add other models to this,

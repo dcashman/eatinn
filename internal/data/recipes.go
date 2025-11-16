@@ -394,12 +394,200 @@ func (r RecipeModel) Get(id int64) (*Recipe, error) {
 	return &recipe, nil
 }
 
-// Add a placeholder method for updating a specific record in the movies table.
+// Update modifies an existing recipe in the database. It uses optimistic locking
+// via the version field to prevent race conditions.
 func (r RecipeModel) Update(recipe *Recipe) error {
-	return nil
+	// Start a transaction
+	tx, err := r.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Update the main recipe record with optimistic locking
+	query := `
+		UPDATE recipes
+		SET name = $1, description = $2, notes = $3, source_url = $4,
+		    prep_time = $5, active_time = $6, servings = $7, version = version + 1
+		WHERE id = $8 AND version = $9
+		RETURNING version`
+
+	args := []any{
+		recipe.Name,
+		recipe.Description,
+		recipe.Notes,
+		recipe.SourceURL,
+		nilIfZero(recipe.PrepTime),
+		nilIfZero(recipe.ActiveTime),
+		nilIfZero(recipe.Servings),
+		recipe.ID,
+		recipe.Version,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&recipe.Version)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return ErrEditConflict
+		default:
+			return err
+		}
+	}
+
+	// Delete existing related data (we'll re-insert it)
+	// This is simpler than trying to diff and update individual items
+
+	// Delete existing ingredients
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM recipe_ingredients WHERE recipe_id = $1
+	`, recipe.ID)
+	if err != nil {
+		return err
+	}
+
+	// Delete existing equipment
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM recipe_equipment WHERE recipe_id = $1
+	`, recipe.ID)
+	if err != nil {
+		return err
+	}
+
+	// Delete existing instructions (CASCADE will handle instruction images)
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM recipe_instructions WHERE recipe_id = $1
+	`, recipe.ID)
+	if err != nil {
+		return err
+	}
+
+	// Delete existing display image
+	_, err = tx.ExecContext(ctx, `
+		DELETE FROM recipe_images WHERE recipe_id = $1 AND image_type = 'main'
+	`, recipe.ID)
+	if err != nil {
+		return err
+	}
+
+	// Re-insert ingredients
+	for _, entry := range recipe.Ingredients {
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO ingredients (name)
+			VALUES ($1)
+			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id
+		`, entry.Ingredient).Scan(&entry.ID)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO recipe_ingredients (recipe_id, ingredient_id, quantity, unit, optional)
+			VALUES ($1, $2, $3, $4, $5)
+		`, recipe.ID, entry.ID, entry.Amount, entry.Unit, entry.Optional)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Re-insert equipment
+	for _, equip := range recipe.RequiredEquipment {
+		var equipmentID int64
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO equipment (name)
+			VALUES ($1)
+			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id
+		`, equip).Scan(&equipmentID)
+		if err != nil {
+			return err
+		}
+
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO recipe_equipment (recipe_id, equipment_id)
+			VALUES ($1, $2)
+		`, recipe.ID, equipmentID)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Re-insert instructions
+	for _, step := range recipe.Instructions {
+		query := `
+			INSERT INTO recipe_instructions (recipe_id, step_number, instruction, notes)
+			VALUES ($1, $2, $3, $4)
+			RETURNING id`
+		args := []any{recipe.ID, step.StepNumber, step.Text, step.Notes}
+		err := tx.QueryRowContext(ctx, query, args...).Scan(&step.ID)
+		if err != nil {
+			return err
+		}
+
+		// Insert images for this instruction step
+		for _, url := range step.ImageURLs {
+			var imageID int64
+			err := tx.QueryRowContext(ctx, `
+				INSERT INTO recipe_images (recipe_id, image_url, image_type)
+				VALUES ($1, $2, 'step')
+				RETURNING id
+			`, recipe.ID, url).Scan(&imageID)
+			if err != nil {
+				return err
+			}
+
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO recipe_instruction_images (instruction_id, image_id)
+				VALUES ($1, $2)
+			`, step.ID, imageID)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// Re-insert display image if provided
+	if recipe.DisplayURL != "" {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO recipe_images (recipe_id, image_url, image_type)
+			VALUES ($1, $2, 'main')
+		`, recipe.ID, recipe.DisplayURL)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
-// Add a placeholder method for deleting a specific record from the movies table.
+// Delete removes a recipe from the database. The CASCADE constraints in the schema
+// will automatically delete related records in junction tables.
 func (r RecipeModel) Delete(id int64) error {
+	if id < 1 {
+		return ErrRecordNotFound
+	}
+
+	query := `DELETE FROM recipes WHERE id = $1`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	result, err := r.DB.ExecContext(ctx, query, id)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrRecordNotFound
+	}
+
 	return nil
 }

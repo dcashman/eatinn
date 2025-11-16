@@ -22,6 +22,8 @@ func (app *application) routes() http.Handler {
 	router.HandlerFunc(http.MethodGet, "/v1/healthcheck", app.healthcheckHandler)
 	router.HandlerFunc(http.MethodPost, "/v1/recipes", app.createRecipeHandler)
 	router.HandlerFunc(http.MethodGet, "/v1/recipes/:id", app.showRecipeHandler)
+	router.HandlerFunc(http.MethodPatch, "/v1/recipes/:id", app.updateRecipeHandler)
+	router.HandlerFunc(http.MethodDelete, "/v1/recipes/:id", app.deleteRecipeHandler)
 
 	// Return the httprouter instance.
 	return app.recoverPanic(router)

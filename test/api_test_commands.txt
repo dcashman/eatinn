@@ -1,0 +1,224 @@
+# EatInn API Test Commands
+# ========================
+# Collection of curl commands to test all API endpoints
+# Base URL: http://localhost:4000
+
+
+## HEALTHCHECK
+## ===========
+
+# Check API health status
+curl http://localhost:4000/v1/healthcheck
+
+
+## CREATE (POST)
+## =============
+
+# Create a new recipe - Beef Pot Roast
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d @test/test_recipe_pot_roast.json
+
+# Create a new recipe - Beef Fajitas
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d @test/test_recipe_fajitas.json
+
+# Create with pretty output (requires jq)
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d @test/test_recipe_pot_roast.json | jq
+
+# Create and show response headers (includes Location header)
+curl -i -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d @test/test_recipe_pot_roast.json
+
+
+## READ (GET)
+## ==========
+
+# Get a specific recipe by ID (replace :id with actual ID, e.g., 1)
+curl http://localhost:4000/v1/recipes/1
+
+# Get recipe with pretty output (requires jq)
+curl http://localhost:4000/v1/recipes/1 | jq
+
+# Get recipe with response headers
+curl -i http://localhost:4000/v1/recipes/1
+
+# Test non-existent recipe (should return 404)
+curl -i http://localhost:4000/v1/recipes/999
+
+# Test invalid ID (should return 404)
+curl -i http://localhost:4000/v1/recipes/abc
+
+
+## UPDATE (PATCH)
+## ==============
+
+# Update a recipe - partial update (only name and notes)
+curl -X PATCH http://localhost:4000/v1/recipes/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ultimate Beef Pot Roast",
+    "notes": "Updated notes with new cooking tips"
+  }'
+
+# Update a recipe - add more ingredients
+curl -X PATCH http://localhost:4000/v1/recipes/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ingredients": [
+      {
+        "ingredient": "Chuck steak",
+        "amount": "5",
+        "unit": "lb",
+        "optional": false
+      },
+      {
+        "ingredient": "Carrots",
+        "amount": "3",
+        "unit": "cups",
+        "optional": false
+      },
+      {
+        "ingredient": "Onions",
+        "amount": "2",
+        "unit": "whole",
+        "optional": false
+      }
+    ]
+  }'
+
+# Update with pretty output
+curl -X PATCH http://localhost:4000/v1/recipes/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "notes": "Best served with mashed potatoes"
+  }' | jq
+
+# Test optimistic locking - send outdated version (should return 409 Conflict)
+# First, get current recipe to see version number
+curl http://localhost:4000/v1/recipes/1 | jq '.recipe.version'
+
+# Then try to update with old version in a concurrent scenario
+# (This demonstrates the edit conflict detection)
+curl -X PATCH http://localhost:4000/v1/recipes/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Update 1"}' & \
+curl -X PATCH http://localhost:4000/v1/recipes/1 \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Update 2"}' &
+
+# Update non-existent recipe (should return 404)
+curl -i -X PATCH http://localhost:4000/v1/recipes/999 \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Non-existent"}'
+
+
+## DELETE
+## ======
+
+# Delete a recipe by ID
+curl -X DELETE http://localhost:4000/v1/recipes/1
+
+# Delete with response headers to see status code
+curl -i -X DELETE http://localhost:4000/v1/recipes/1
+
+# Delete non-existent recipe (should return 404)
+curl -i -X DELETE http://localhost:4000/v1/recipes/999
+
+# Delete invalid ID (should return 404)
+curl -i -X DELETE http://localhost:4000/v1/recipes/abc
+
+
+## ERROR TESTING
+## =============
+
+# Test validation errors - missing required fields
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "notes": "This will fail because name is required"
+  }'
+
+# Test validation errors - empty name
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "",
+    "ingredients": []
+  }'
+
+# Test malformed JSON
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Bad JSON"
+    "missing": "comma"
+  }'
+
+# Test unknown fields (should be rejected)
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test Recipe",
+    "unknown_field": "This should cause an error"
+  }'
+
+# Test method not allowed
+curl -X PUT http://localhost:4000/v1/recipes/1
+
+
+## WORKFLOW EXAMPLE
+## ================
+
+# Complete workflow: Create -> Read -> Update -> Read -> Delete
+
+# 1. Create a recipe
+curl -X POST http://localhost:4000/v1/recipes \
+  -H "Content-Type: application/json" \
+  -d @test/test_recipe_pot_roast.json | jq '.recipe.id'
+
+# 2. Read the recipe (use ID from step 1)
+curl http://localhost:4000/v1/recipes/1 | jq
+
+# 3. Update the recipe
+curl -X PATCH http://localhost:4000/v1/recipes/1 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "notes": "Modified in workflow test"
+  }' | jq
+
+# 4. Read again to verify update
+curl http://localhost:4000/v1/recipes/1 | jq
+
+# 5. Delete the recipe
+curl -i -X DELETE http://localhost:4000/v1/recipes/1
+
+# 6. Verify deletion (should return 404)
+curl -i http://localhost:4000/v1/recipes/1
+
+
+## PERFORMANCE TESTING
+## ===================
+
+# Test with timing (shows request duration)
+curl -w '\nTime: %{time_total}s\n' http://localhost:4000/v1/recipes/1
+
+# Create multiple recipes rapidly
+for i in {1..5}; do
+  curl -X POST http://localhost:4000/v1/recipes \
+    -H "Content-Type: application/json" \
+    -d @test/test_recipe_pot_roast.json
+done
+
+
+## NOTES
+## =====
+# - Replace :id or /1 with actual recipe IDs from your database
+# - The -i flag shows response headers
+# - The -w flag shows timing information
+# - Pipe to | jq for pretty-printed JSON output
+# - Use & at end of command to run in background (for concurrent testing)
