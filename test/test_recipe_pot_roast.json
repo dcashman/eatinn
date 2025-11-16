@@ -1,0 +1,28 @@
+{
+  "name": "Beef Pot Roast",
+  "ingredients": [
+    {
+      "ingredient": "Chuck steak",
+      "amount": "5",
+      "unit": "lb",
+      "optional": false
+    }
+  ],
+  "required_equipment": [
+    "Dutch Oven"
+  ],
+  "instructions": [
+    {
+      "step_number": 1,
+      "text": "Step 1"
+    },
+    {
+      "step_number": 2,
+      "text": "Step 2"
+    }
+  ],
+  "notes": "Notes",
+  "display_url": "https://xkcd.com",
+  "source_url": "youtube.com",
+  "public": false
+}

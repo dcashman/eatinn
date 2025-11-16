@@ -1,0 +1,28 @@
+{
+  "name": "Beef Fajitas",
+  "ingredients": [
+    {
+      "ingredient": "Flap steak",
+      "amount": "5",
+      "unit": "lb",
+      "optional": false
+    }
+  ],
+  "required_equipment": [
+    "grill"
+  ],
+  "instructions": [
+    {
+      "step_number": 1,
+      "text": "Buy steak"
+    },
+    {
+      "step_number": 2,
+      "text": "Cook steak"
+    }
+  ],
+  "notes": "Notes",
+  "display_url": "https://bbc.co.uk",
+  "source_url": "youtube.com",
+  "public": false
+}

@@ -1,1 +1,11 @@
+DROP TABLE IF EXISTS recipe_tags;
+DROP TABLE IF EXISTS tags;
+DROP TABLE IF EXISTS recipe_instruction_images;
+DROP TABLE IF EXISTS recipe_images;
+DROP TYPE IF EXISTS recipe_image_type;
+DROP TABLE IF EXISTS recipe_instructions;
+DROP TABLE IF EXISTS recipe_equipment;
+DROP TABLE IF EXISTS recipe_ingredients;
+DROP TABLE IF EXISTS equipment;
+DROP TABLE IF EXISTS ingredients;
 DROP TABLE IF EXISTS recipes;

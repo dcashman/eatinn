@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -10,27 +11,22 @@ import (
 )
 
 func (app *application) showRecipeHandler(w http.ResponseWriter, r *http.Request) {
-
 	id, err := app.readIDParam(r)
 	if err != nil {
 		app.notFoundResponse(w, r)
 		return
 	}
 
-	// Create a new instance of the Recipe struct, containing the ID we extracted from
-	// the URL and some dummy data.
-	recipe := data.Recipe{
-		ID:                id,
-		CreatedAt:         time.Now(),
-		Name:              "Beef Pot Roast",
-		Ingredients:       []data.IngredientEntry{{Ingredient: "Chuck steak", Amount: "5lb"}},
-		RequiredEquipment: []string{"Dutch Oven"},
-		Instructions:      []string{"Step 1", "Step 2"},
-		Notes:             "Notes",
-		DisplayURL:        "https://xkcd.com",
-		SourceURL:         "youtube.com",
-		// AND MORE
-		Version: 1,
+	// Fetch the recipe from the database
+	recipe, err := app.models.Recipes.Get(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, data.ErrRecordNotFound):
+			app.notFoundResponse(w, r)
+		default:
+			app.serverErrorResponse(w, r, err)
+		}
+		return
 	}
 
 	// Encode the struct to JSON and send it as the HTTP response.
@@ -48,7 +44,7 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 		Name              string                 `json:"name"`
 		Ingredients       []data.IngredientEntry `json:"ingredients"`
 		RequiredEquipment []string               `json:"required_equipment"`
-		Instructions      []string               `json:"instructions"`
+		Instructions      []data.InstructionStep `json:"instructions"`
 		Notes             string                 `json:"notes"`
 		DisplayURL        string                 `json:"display_url"`
 		SourceURL         string                 `json:"source_url"`
@@ -64,6 +60,7 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// TODO: convert all strings to lower-case where appropriate.
 	recipe := &data.Recipe{
 		Name:              input.Name,
 		Ingredients:       input.Ingredients,
@@ -85,6 +82,26 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Dump the contents of the input struct in a HTTP response.
-	fmt.Fprintf(w, "%+v\n", input)
+	// Call the Insert() method on our recipe model, passing in a pointer to the
+	// validated movie struct. This will create a record in the database and update the
+	// recipe struct with the system-generated information.
+	err = app.models.Recipes.Insert(recipe)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+		return
+	}
+
+	// When sending a HTTP response, we want to include a Location header to let the
+	// client know which URL they can find the newly-created resource at. We make an
+	// empty http.Header map and then use the Set() method to add a new Location header,
+	// interpolating the system-generated ID for our new recipe in the URL.
+	headers := make(http.Header)
+	headers.Set("Location", fmt.Sprintf("/v1/recipes/%d", recipe.ID))
+
+	// Write a JSON response with a 201 Created status code, the movie data in the
+	// response body, and the Location header.
+	err = app.writeJSON(w, http.StatusCreated, envelope{"recipe": recipe}, headers)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
 }
