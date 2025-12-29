@@ -1,0 +1,37 @@
+{
+  "name": "Quick Pasta",
+  "ingredients": [
+    {
+      "ingredient": "Pasta",
+      "amount": "1",
+      "unit": "lb",
+      "optional": false
+    },
+    {
+      "ingredient": "Olive oil",
+      "amount": "2",
+      "unit": "tbsp",
+      "optional": false
+    }
+  ],
+  "required_equipment": [
+    "Large pot"
+  ],
+  "instructions": [
+    {
+      "step_number": 1,
+      "text": "Boil water"
+    },
+    {
+      "step_number": 2,
+      "text": "Cook pasta for 8-10 minutes"
+    }
+  ],
+  "notes": "Salt the water generously",
+  "display_url": "https://example.com/pasta.jpg",
+  "source_url": "https://example.com/recipe",
+  "prep_time": "5m",
+  "active_time": "15m",
+  "public": true,
+  "servings": 4
+}

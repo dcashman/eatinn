@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"eatinn.dcashman.net/internal/validator"
@@ -37,8 +38,8 @@ type Recipe struct {
 	Notes             string            `json:"notes,omitempty"`              // Additional notes added to the recipe, not attached to any step.
 	DisplayURL        string            `json:"display_url,omitempty"`        // URL of the image to display for this recipe
 	SourceURL         string            `json:"source_url,omitempty"`         // Source of the recipe
-	PrepTime          time.Duration     `json:"prep_time,omitempty"`          // The wall-clock time required to make the recipe.
-	ActiveTime        time.Duration     `json:"active_time,omitempty"`        // The amount of time actively preparing the recipe, rather than passively waiting.
+	PrepTime          Duration          `json:"prep_time,omitempty"`          // The wall-clock time required to make the recipe.
+	ActiveTime        Duration          `json:"active_time,omitempty"`        // The amount of time actively preparing the recipe, rather than passively waiting.
 	Creator           string            `json:"creator,omitempty"`            // User who created this recipe
 	Public            bool              `json:"public"`                       // Whether or not this recipe should be made globally available.
 	Servings          int32             `json:"servings,omitempty"`           // Number of servings for this recipe
@@ -68,6 +69,18 @@ func nilIfZero[T comparable](v T) any {
 	return v
 }
 
+// durationToInterval converts a time.Duration to a PostgreSQL interval string.
+// Returns nil if the duration is zero, otherwise returns a string like "300.5 seconds".
+func durationToInterval(d time.Duration) *string {
+	if d == 0 {
+		return nil
+	}
+	// PostgreSQL interval format: "X seconds" where X can be fractional
+	seconds := d.Seconds()
+	interval := fmt.Sprintf("%f seconds", seconds)
+	return &interval
+}
+
 func (r RecipeModel) Insert(recipe *Recipe) error {
 
 	tx, err := r.DB.Begin()
@@ -87,7 +100,8 @@ func (r RecipeModel) Insert(recipe *Recipe) error {
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at, version`
 
-	args := []any{recipe.Name, recipe.Description, instructionsJSON, recipe.Notes, recipe.SourceURL, nilIfZero(recipe.PrepTime), nilIfZero(recipe.ActiveTime), nilIfZero(recipe.Servings)}
+	// Convert data.Duration to PostgreSQL interval strings for database storage
+	args := []any{recipe.Name, recipe.Description, instructionsJSON, recipe.Notes, recipe.SourceURL, durationToInterval(time.Duration(recipe.PrepTime)), durationToInterval(time.Duration(recipe.ActiveTime)), nilIfZero(recipe.Servings)}
 	err = tx.QueryRow(
 		query,
 		args...,
@@ -238,10 +252,10 @@ func (r RecipeModel) Get(id int64) (*Recipe, error) {
 		recipe.SourceURL = sourceURL.String
 	}
 	if prepTime.Valid {
-		recipe.PrepTime = time.Duration(prepTime.Int64)
+		recipe.PrepTime = Duration(prepTime.Int64)
 	}
 	if activeTime.Valid {
-		recipe.ActiveTime = time.Duration(activeTime.Int64)
+		recipe.ActiveTime = Duration(activeTime.Int64)
 	}
 	if servings.Valid {
 		recipe.Servings = servings.Int32
@@ -412,13 +426,14 @@ func (r RecipeModel) Update(recipe *Recipe) error {
 		WHERE id = $8 AND version = $9
 		RETURNING version`
 
+	// Convert data.Duration to PostgreSQL interval strings for database storage
 	args := []any{
 		recipe.Name,
 		recipe.Description,
 		recipe.Notes,
 		recipe.SourceURL,
-		nilIfZero(recipe.PrepTime),
-		nilIfZero(recipe.ActiveTime),
+		durationToInterval(time.Duration(recipe.PrepTime)),
+		durationToInterval(time.Duration(recipe.ActiveTime)),
 		nilIfZero(recipe.Servings),
 		recipe.ID,
 		recipe.Version,
@@ -590,4 +605,161 @@ func (r RecipeModel) Delete(id int64) error {
 	}
 
 	return nil
+}
+
+// GetAll retrieves a list of recipes with optional filtering, sorting, and pagination.
+// Returns a slice of recipes and pagination metadata.
+func (r RecipeModel) GetAll(name string, ingredients []string, equipment []string, prepTime Duration, activeTime Duration, filters Filters) ([]*Recipe, Metadata, error) {
+	// Build the query with window function for total count
+	// Use a CTE to filter recipes, then join for display images
+	// Note: Go's time.Duration is int64 nanoseconds, but PostgreSQL prep_time/active_time
+	// columns are interval type. We extract epoch (total seconds) from the interval and
+	// compare it to the input nanoseconds converted to seconds.
+	query := `
+		WITH filtered_recipes AS (
+			SELECT DISTINCT r.id, r.name, r.description, r.prep_time, r.active_time,
+			       r.servings, r.created_at, r.version
+			FROM recipes r
+			WHERE ($1 = '' OR r.name ILIKE '%' || $1 || '%')
+			  AND ($2::double precision = 0 OR EXTRACT(EPOCH FROM r.prep_time) <= $2::double precision / 1000000000.0)
+			  AND ($3::double precision = 0 OR EXTRACT(EPOCH FROM r.active_time) <= $3::double precision / 1000000000.0)
+	`
+
+	// Build arguments slice - convert data.Duration to float64 nanoseconds for database query
+	args := []any{name, float64(time.Duration(prepTime)), float64(time.Duration(activeTime))}
+	argPos := 4
+
+	// Add ingredients filter if provided
+	if len(ingredients) > 0 {
+		query += ` AND r.id IN (
+			SELECT ri.recipe_id
+			FROM recipe_ingredients ri
+			JOIN ingredients i ON ri.ingredient_id = i.id
+			WHERE i.name ILIKE ANY($` + fmt.Sprint(argPos) + `)
+		)`
+		// Convert ingredients to lowercase for case-insensitive matching
+		lowerIngredients := make([]string, len(ingredients))
+		for i, ing := range ingredients {
+			lowerIngredients[i] = "%" + ing + "%"
+		}
+		args = append(args, lowerIngredients)
+		argPos++
+	}
+
+	// Add equipment filter if provided
+	if len(equipment) > 0 {
+		query += ` AND r.id IN (
+			SELECT re.recipe_id
+			FROM recipe_equipment re
+			JOIN equipment e ON re.equipment_id = e.id
+			WHERE e.name ILIKE ANY($` + fmt.Sprint(argPos) + `)
+		)`
+		// Convert equipment to lowercase for case-insensitive matching
+		lowerEquipment := make([]string, len(equipment))
+		for i, eq := range equipment {
+			lowerEquipment[i] = "%" + eq + "%"
+		}
+		args = append(args, lowerEquipment)
+		argPos++
+	}
+
+	// Close the CTE and build main query with COUNT(*) OVER()
+	query += `
+		)
+		SELECT COUNT(*) OVER() as total_records,
+		       fr.id, fr.name, fr.description, fr.prep_time, fr.active_time,
+		       fr.servings, fr.created_at, fr.version,
+		       ri.image_url as display_url
+		FROM filtered_recipes fr
+		LEFT JOIN recipe_images ri ON fr.id = ri.recipe_id AND ri.image_type = 'main'
+	`
+
+	// Add ORDER BY clause
+	sortColumn := filters.Sort
+	sortDirection := "ASC"
+	if len(sortColumn) > 0 && sortColumn[0] == '-' {
+		sortDirection = "DESC"
+		sortColumn = sortColumn[1:]
+	}
+
+	// Map sort column names to database columns
+	sortColumns := map[string]string{
+		"id":          "fr.id",
+		"name":        "fr.name",
+		"prep_time":   "fr.prep_time",
+		"active_time": "fr.active_time",
+	}
+
+	if dbColumn, ok := sortColumns[sortColumn]; ok {
+		query += fmt.Sprintf(" ORDER BY %s %s", dbColumn, sortDirection)
+	} else {
+		query += " ORDER BY fr.id ASC"
+	}
+
+	// Add LIMIT and OFFSET for pagination
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", argPos, argPos+1)
+	args = append(args, filters.PageSize, (filters.Page-1)*filters.PageSize)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rows, err := r.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, Metadata{}, err
+	}
+	defer rows.Close()
+
+	totalRecords := 0
+	recipes := []*Recipe{}
+
+	for rows.Next() {
+		var recipe Recipe
+		var description sql.NullString
+		var prepTime, activeTime sql.NullInt64
+		var servings sql.NullInt32
+		var displayURL sql.NullString
+
+		err := rows.Scan(
+			&totalRecords,
+			&recipe.ID,
+			&recipe.Name,
+			&description,
+			&prepTime,
+			&activeTime,
+			&servings,
+			&recipe.CreatedAt,
+			&recipe.Version,
+			&displayURL,
+		)
+		if err != nil {
+			return nil, Metadata{}, err
+		}
+
+		// Handle NULL values
+		if description.Valid {
+			recipe.Description = description.String
+		}
+		if prepTime.Valid {
+			recipe.PrepTime = Duration(prepTime.Int64)
+		}
+		if activeTime.Valid {
+			recipe.ActiveTime = Duration(activeTime.Int64)
+		}
+		if servings.Valid {
+			recipe.Servings = servings.Int32
+		}
+		if displayURL.Valid {
+			recipe.DisplayURL = displayURL.String
+		}
+
+		recipes = append(recipes, &recipe)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, Metadata{}, err
+	}
+
+	metadata := calculateMetadata(totalRecords, filters.Page, filters.PageSize)
+
+	return recipes, metadata, nil
 }

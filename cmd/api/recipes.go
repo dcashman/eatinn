@@ -48,8 +48,8 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 		Notes             string                 `json:"notes"`
 		DisplayURL        string                 `json:"display_url"`
 		SourceURL         string                 `json:"source_url"`
-		PrepTime          time.Duration          `json:"prep_time"`
-		ActiveTime        time.Duration          `json:"active_time"`
+		PrepTime          data.Duration          `json:"prep_time"`
+		ActiveTime        data.Duration          `json:"active_time"`
 		Public            bool                   `json:"public"`
 		Servings          int32                  `json:"servings"`
 	}
@@ -127,17 +127,17 @@ func (app *application) updateRecipeHandler(w http.ResponseWriter, r *http.Reque
 
 	// Parse the request body
 	var input struct {
-		Name              *string                 `json:"name"`
-		Description       *string                 `json:"description"`
-		Ingredients       []data.IngredientEntry  `json:"ingredients"`
-		RequiredEquipment []string                `json:"required_equipment"`
-		Instructions      []data.InstructionStep  `json:"instructions"`
-		Notes             *string                 `json:"notes"`
-		DisplayURL        *string                 `json:"display_url"`
-		SourceURL         *string                 `json:"source_url"`
-		PrepTime          *time.Duration          `json:"prep_time"`
-		ActiveTime        *time.Duration          `json:"active_time"`
-		Servings          *int32                  `json:"servings"`
+		Name              *string                `json:"name"`
+		Description       *string                `json:"description"`
+		Ingredients       []data.IngredientEntry `json:"ingredients"`
+		RequiredEquipment []string               `json:"required_equipment"`
+		Instructions      []data.InstructionStep `json:"instructions"`
+		Notes             *string                `json:"notes"`
+		DisplayURL        *string                `json:"display_url"`
+		SourceURL         *string                `json:"source_url"`
+		PrepTime          *data.Duration         `json:"prep_time"`
+		ActiveTime        *data.Duration         `json:"active_time"`
+		Servings          *int32                 `json:"servings"`
 	}
 
 	err = app.readJSON(w, r, &input)
@@ -227,6 +227,65 @@ func (app *application) deleteRecipeHandler(w http.ResponseWriter, r *http.Reque
 
 	// Return success message
 	err = app.writeJSON(w, http.StatusOK, envelope{"message": "recipe successfully deleted"}, nil)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+	}
+}
+
+func (app *application) listRecipesHandler(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Name              string        `json:"name"`
+		Ingredients       []string      `json:"ingredients"`
+		RequiredEquipment []string      `json:"required_equipment"`
+		PrepTime          data.Duration `json:"prep_time"`
+		ActiveTime        data.Duration `json:"active_time"`
+		data.Filters
+	}
+
+	v := validator.New()
+
+	qs := r.URL.Query()
+
+	input.Name = app.readString(qs, "name", "")
+	input.Ingredients = app.readCSV(qs, "ingredients", []string{})
+	input.RequiredEquipment = app.readCSV(qs, "required_equipment", []string{})
+	// Query parameters accept minutes, convert to data.Duration
+	input.PrepTime = data.Duration(time.Duration(app.readInt(qs, "prep_time", 0, v)) * time.Minute)
+	input.ActiveTime = data.Duration(time.Duration(app.readInt(qs, "active_time", 0, v)) * time.Minute)
+	input.Filters.Page = app.readInt(qs, "page", 1, v)
+	input.Filters.PageSize = app.readInt(qs, "page_size", 20, v)
+
+	// Extract the sort query string value, falling back to "id" if it is not provided
+	// by the client (which will imply a ascending sort on recipe ID).
+	input.Sort = app.readString(qs, "sort", "id")
+	input.Filters.SortSafelist = []string{"id", "name", "prep_time", "active_time", "-id", "-name", "-prep_time", "-active_time"}
+
+	if data.ValidateFilters(v, input.Filters); !v.Valid() {
+		app.failedValidationResponse(w, r, v.Errors)
+		return
+	}
+
+	if !v.Valid() {
+		app.failedValidationResponse(w, r, v.Errors)
+		return
+	}
+
+	// Call the GetAll() method to retrieve the recipes
+	recipes, metadata, err := app.models.Recipes.GetAll(
+		input.Name,
+		input.Ingredients,
+		input.RequiredEquipment,
+		input.PrepTime,
+		input.ActiveTime,
+		input.Filters,
+	)
+	if err != nil {
+		app.serverErrorResponse(w, r, err)
+		return
+	}
+
+	// Send the JSON response with the recipes and metadata
+	err = app.writeJSON(w, http.StatusOK, envelope{"recipes": recipes, "metadata": metadata}, nil)
 	if err != nil {
 		app.serverErrorResponse(w, r, err)
 	}
