@@ -48,6 +48,7 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 // like a UserModel and PermissionModel, as our build progresses.
 type Models struct {
 	Recipes RecipeModel
+	Users   UserModel
 }
 
 // For ease of use, we also add a New() method which returns a Models struct containing
@@ -55,5 +56,6 @@ type Models struct {
 func NewModels(db *sql.DB) Models {
 	return Models{
 		Recipes: RecipeModel{DB: db},
+		Users:   UserModel{DB: db},
 	}
 }
