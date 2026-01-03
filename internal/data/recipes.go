@@ -664,10 +664,13 @@ func (r RecipeModel) GetAll(name string, ingredients []string, equipment []strin
 	}
 
 	// Close the CTE and build main query with COUNT(*) OVER()
+	// Extract prep_time and active_time as seconds (float) for easier scanning into Go
 	query += `
 		)
 		SELECT COUNT(*) OVER() as total_records,
-		       fr.id, fr.name, fr.description, fr.prep_time, fr.active_time,
+		       fr.id, fr.name, fr.description,
+		       EXTRACT(EPOCH FROM fr.prep_time) as prep_time,
+		       EXTRACT(EPOCH FROM fr.active_time) as active_time,
 		       fr.servings, fr.created_at, fr.version,
 		       ri.image_url as display_url
 		FROM filtered_recipes fr
@@ -715,7 +718,7 @@ func (r RecipeModel) GetAll(name string, ingredients []string, equipment []strin
 	for rows.Next() {
 		var recipe Recipe
 		var description sql.NullString
-		var prepTime, activeTime sql.NullInt64
+		var prepTimeSeconds, activeTimeSeconds sql.NullFloat64
 		var servings sql.NullInt32
 		var displayURL sql.NullString
 
@@ -724,8 +727,8 @@ func (r RecipeModel) GetAll(name string, ingredients []string, equipment []strin
 			&recipe.ID,
 			&recipe.Name,
 			&description,
-			&prepTime,
-			&activeTime,
+			&prepTimeSeconds,
+			&activeTimeSeconds,
 			&servings,
 			&recipe.CreatedAt,
 			&recipe.Version,
@@ -739,11 +742,13 @@ func (r RecipeModel) GetAll(name string, ingredients []string, equipment []strin
 		if description.Valid {
 			recipe.Description = description.String
 		}
-		if prepTime.Valid {
-			recipe.PrepTime = Duration(prepTime.Int64)
+		if prepTimeSeconds.Valid {
+			// Convert seconds (float64) to Duration (nanoseconds)
+			recipe.PrepTime = Duration(time.Duration(prepTimeSeconds.Float64 * float64(time.Second)))
 		}
-		if activeTime.Valid {
-			recipe.ActiveTime = Duration(activeTime.Int64)
+		if activeTimeSeconds.Valid {
+			// Convert seconds (float64) to Duration (nanoseconds)
+			recipe.ActiveTime = Duration(time.Duration(activeTimeSeconds.Float64 * float64(time.Second)))
 		}
 		if servings.Valid {
 			recipe.Servings = servings.Int32

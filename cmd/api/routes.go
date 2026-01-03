@@ -23,10 +23,10 @@ func (app *application) routes() http.Handler {
 
 	// Recipes
 	router.HandlerFunc(http.MethodGet, "/v1/recipes", app.listRecipesHandler)
-	router.HandlerFunc(http.MethodPost, "/v1/recipes", app.createRecipeHandler)
+	router.HandlerFunc(http.MethodPost, "/v1/recipes", app.requireActivatedUser(app.createRecipeHandler))
 	router.HandlerFunc(http.MethodGet, "/v1/recipes/:id", app.showRecipeHandler)
-	router.HandlerFunc(http.MethodPatch, "/v1/recipes/:id", app.updateRecipeHandler)
-	router.HandlerFunc(http.MethodDelete, "/v1/recipes/:id", app.deleteRecipeHandler)
+	router.HandlerFunc(http.MethodPatch, "/v1/recipes/:id", app.requireActivatedUser(app.updateRecipeHandler))
+	router.HandlerFunc(http.MethodDelete, "/v1/recipes/:id", app.requireActivatedUser(app.deleteRecipeHandler))
 
 	// Users
 	router.HandlerFunc(http.MethodPost, "/v1/users", app.registerUserHandler)
