@@ -15,6 +15,8 @@ var (
 	ErrDuplicateEmail = errors.New("duplicate email")
 )
 
+var AnonymousUser = &User{}
+
 // Create a UserModel struct which wraps the connection pool.
 type UserModel struct {
 	DB *sql.DB
@@ -198,4 +200,8 @@ func (m UserModel) Update(user *User) error {
 	}
 
 	return nil
+}
+
+func (u *User) IsAnonymous() bool {
+	return u == AnonymousUser
 }
