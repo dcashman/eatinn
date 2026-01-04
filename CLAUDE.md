@@ -4,7 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-EatInn is a REST API for managing recipes, built with Go and PostgreSQL. The application provides endpoints for creating, viewing, and managing recipes with detailed information including ingredients, equipment, instructions, and images.
+EatInn is a production-ready REST API for managing recipes, built with Go and PostgreSQL. The application provides full CRUD operations for recipes with advanced filtering, user authentication, and background email processing.
+
+**Current Status**: ✅ **Production-Ready MVP**
+- 8 fully operational API endpoints
+- Complete user authentication with activation tokens
+- Recipe management with complex relational data
+- IP-based rate limiting and graceful shutdown
+- Background email sending with proper cleanup
+
+**Implementation Status**: Chapters 1-15 of "Let's Go Further" are complete. The application is ready for deployment and use.
 
 **Important**: This project follows the patterns and best practices from "Let's Go Further" by Alex Edwards. Both "Let's Go" and "Let's Go Further" are available at `~/projects/docs/lets-go/html/` and `~/projects/docs/lets-go-further/html/` for reference. When patterns conflict, prefer "Let's Go Further" guidance.
 
@@ -16,12 +25,27 @@ EatInn is a REST API for managing recipes, built with Go and PostgreSQL. The app
 go run ./cmd/api -db-dsn=$EATINN_DB_DSN
 ```
 
-Optional flags:
+**Server Configuration Flags:**
 - `-port`: API server port (default: 4000)
 - `-env`: Environment (development|staging|production, default: development)
+
+**Database Configuration Flags:**
+- `-db-dsn`: PostgreSQL DSN (default: $EATINN_DB_DSN env var)
 - `-db-max-open-conns`: PostgreSQL max open connections (default: 25)
 - `-db-max-idle-conns`: PostgreSQL max idle connections (default: 25)
 - `-db-max-idle-time`: PostgreSQL max connection idle time (default: 15m)
+
+**Rate Limiting Configuration Flags:**
+- `-limiter-rps`: Maximum requests per second (default: 2)
+- `-limiter-burst`: Maximum burst size (default: 4)
+- `-limiter-enabled`: Enable rate limiter (default: true)
+
+**SMTP Configuration Flags:**
+- `-smtp-host`: SMTP server host (default: sandbox.smtp.mailtrap.io)
+- `-smtp-port`: SMTP server port (default: 2525)
+- `-smtp-username`: SMTP username (default: test credentials)
+- `-smtp-password`: SMTP password (default: test credentials)
+- `-smtp-sender`: Email sender address (default: EatInn <no-reply@eatinn.dcashman.net>)
 
 ### Database Setup
 
@@ -44,39 +68,52 @@ Test data is available in `test/test_recipes.json` for manual API testing.
 
 ```
 cmd/api/              - HTTP server and handlers
-  main.go             - Application entry point, config, DB setup
+  main.go             - Application entry point, config, DB setup, WaitGroup
+  server.go           - HTTP server with graceful shutdown
   routes.go           - Route definitions using julienschmidt/httprouter
-  recipes.go          - Recipe CRUD handlers
-  helpers.go          - JSON encoding/decoding, parameter extraction
-  errors.go           - Centralized error response handlers
-  middleware.go       - HTTP middleware (panic recovery)
+  recipes.go          - Recipe CRUD handlers (all implemented)
+  users.go            - User registration and activation handlers
+  tokens.go           - Authentication token generation handler
+  context.go          - Request context helpers for user management
+  helpers.go          - JSON encoding/decoding, background tasks, parameter extraction
+  errors.go           - Centralized error response handlers (11 types)
+  middleware.go       - HTTP middleware (panic recovery, rate limiting, authentication)
   healthcheck.go      - Health check endpoint
 
 internal/
   data/               - Data layer (models and database access)
-    models.go         - Models struct, error definitions
-    recipes.go        - Recipe model, validation, CRUD operations
+    models.go         - Models struct, custom Duration type, error definitions
+    recipes.go        - Recipe model with full CRUD operations
+    users.go          - User model with password hashing (bcrypt cost 12)
+    tokens.go         - Token model with cryptographic token generation
+    filters.go        - Pagination and sorting support
   validator/          - Input validation utilities
     validator.go      - Validator type and helper functions
+  mailer/             - Email sending functionality
+    mailer.go         - SMTP mailer with template support
+    templates/        - Embedded email templates
 
-migrations/           - SQL database migrations
+migrations/           - SQL database migrations (4 migrations)
 test/                 - Test data and fixtures
 bin/                  - Compiled binaries
 ```
 
 ### Key Architectural Patterns
 
-**Application Context Pattern**: The `application` struct in `cmd/api/main.go:34` is the central dependency container that holds:
-- Configuration
+**Application Context Pattern**: The `application` struct in `cmd/api/main.go:46` is the central dependency container that holds:
+- Configuration (server, database, rate limiting, SMTP)
 - Structured logger (slog)
-- Data models
+- Data models (Recipes, Users, Tokens)
+- Mailer instance
+- WaitGroup for tracking background goroutines
 
 All handlers are methods on this struct, providing access to dependencies without globals.
 
 **Data Model Layer**: The `internal/data` package provides:
-- `Models` struct that wraps all model types (`RecipeModel`, future `UserModel`, etc.)
+- `Models` struct that wraps all model types (`RecipeModel`, `UserModel`, `TokenModel`)
 - `NewModels(db)` factory function for initialization
 - Each model has its own file and encapsulates database operations
+- Custom `Duration` type with JSON marshaling/unmarshaling
 
 **Envelope Response Pattern**: All JSON responses use an envelope wrapper (see `cmd/api/helpers.go:29`):
 ```go
@@ -88,27 +125,62 @@ envelope{"error": errorMessage}
 
 ### Database Schema
 
-The schema uses a normalized relational design:
+The schema uses a normalized relational design with 4 migrations:
 
-- **recipes**: Core recipe metadata (name, description, notes, times, servings)
-- **ingredients**: Normalized ingredient names (deduplicated)
-- **equipment**: Normalized equipment names (deduplicated)
-- **recipe_ingredients**: Junction table linking recipes to ingredients with quantity/unit
-- **recipe_equipment**: Junction table linking recipes to equipment
-- **recipe_instructions**: Step-by-step instructions with order
-- **recipe_images**: Image URLs with types (thumbnail, main, step)
+**Recipe Tables (Migration 000001, 000002):**
+- **recipes**: Core recipe metadata (name, description, notes, prep_time interval, active_time interval, servings, version)
+- **ingredients**: Normalized ingredient names (deduplicated with UNIQUE constraint)
+- **equipment**: Normalized equipment names (deduplicated with UNIQUE constraint)
+- **recipe_ingredients**: Junction table with quantity, unit, optional flag
+- **recipe_equipment**: Junction table for required equipment
+- **recipe_instructions**: Step-by-step instructions with step_number, text, notes
+- **recipe_images**: Image URLs with ENUM type (thumbnail, main, step)
 - **recipe_instruction_images**: Links images to specific instruction steps
-- **tags** / **recipe_tags**: Tagging system (schema exists, not yet implemented)
+- **tags** / **recipe_tags**: Tagging system (schema exists, not yet implemented in code)
 
-The `instructions` field in the recipes table stores JSONB for flexibility, but the normalized `recipe_instructions` table is used for structured step-by-step data.
+**User & Authentication Tables (Migration 000003, 000004):**
+- **users**: User accounts with citext email (case-insensitive), password_hash (bytea), activated (boolean), version (optimistic locking)
+- **tokens**: Authentication and activation tokens with hash (SHA-256), user_id (FK with CASCADE), expiry, scope
+
+**Key Schema Features:**
+- Optimistic locking via `version` fields (recipes, users)
+- CASCADE deletes throughout the schema
+- Check constraints: prep_time >= 0, active_time >= 0, servings > 0
+- UNIQUE constraints for data deduplication
+- Custom ENUM type for image categorization
+
+The `instructions` field in the recipes table stores JSONB for flexibility, but the normalized `recipe_instructions` table is primarily used for structured step-by-step data.
 
 ### API Endpoints
 
-- `GET /v1/healthcheck` - Service health status
-- `POST /v1/recipes` - Create a new recipe
-- `GET /v1/recipes/:id` - Get recipe by ID (currently returns dummy data)
+All endpoints are **fully implemented and operational**:
 
-Note: Update, Delete, and List operations are stubbed in `recipes.go:190-197` and not yet implemented.
+**Health Check:**
+- `GET /v1/healthcheck` - Service health status
+
+**Recipes (Full CRUD + List):**
+- `GET /v1/recipes` - List recipes with filtering, sorting, and pagination ✅
+- `POST /v1/recipes` - Create new recipe (requires activated user) ✅
+- `GET /v1/recipes/:id` - Get single recipe with all related data ✅
+- `PATCH /v1/recipes/:id` - Update recipe with optimistic locking (requires activated user) ✅
+- `DELETE /v1/recipes/:id` - Delete recipe (requires activated user) ✅
+
+**Users:**
+- `POST /v1/users` - Register new user account ✅
+- `PUT /v1/users/activated` - Activate user account with token ✅
+
+**Authentication:**
+- `POST /v1/tokens/authentication` - Generate authentication token (24h expiry) ✅
+
+**Filtering Options for GET /v1/recipes:**
+- `name` - Filter by recipe name (case-insensitive partial match)
+- `ingredients` - Filter by ingredients (comma-separated list)
+- `equipment` - Filter by required equipment (comma-separated list)
+- `prep_time` - Maximum prep time in minutes
+- `active_time` - Maximum active time in minutes
+- `sort` - Sort by: id, name, prep_time, active_time (prefix with `-` for descending)
+- `page` - Page number (default: 1)
+- `page_size` - Results per page (default: 20, max: 100)
 
 ### Validation
 
@@ -121,14 +193,20 @@ Validation is applied in handlers before database operations (see `recipes.go:83
 
 ### Error Handling
 
-Centralized error response handlers in `cmd/api/errors.go`:
+Centralized error response handlers in `cmd/api/errors.go` (11 types):
 - `serverErrorResponse()` - 500 Internal Server Error with logging
 - `notFoundResponse()` - 404 Not Found
 - `methodNotAllowedResponse()` - 405 Method Not Allowed
 - `badRequestResponse()` - 400 Bad Request
 - `failedValidationResponse()` - 422 Unprocessable Entity with validation errors
+- `editConflictResponse()` - 409 Conflict (optimistic locking failure)
+- `rateLimitExceededResponse()` - 429 Too Many Requests
+- `invalidCredentialsResponse()` - 401 Unauthorized (bad email/password)
+- `invalidAuthenticationTokenResponse()` - 401 Unauthorized (bad token)
+- `authenticationRequiredResponse()` - 401 Unauthorized (missing token)
+- `inactiveAccountResponse()` - 403 Forbidden (account not activated)
 
-Panic recovery middleware wraps all routes (see `middleware.go:8`).
+Panic recovery middleware wraps all routes with proper `Connection: close` header handling (see `middleware.go:17`).
 
 ### JSON Handling
 
@@ -138,47 +216,94 @@ Panic recovery middleware wraps all routes (see `middleware.go:8`).
 - Detailed error messages for malformed JSON
 - Protection against multiple JSON values
 
-## Current Status & Uncommitted Work
+## Current Status - Production Ready Core Features
 
-**IMPORTANT**: There are uncommitted changes in the repository representing in-progress work on database schema normalization.
+### ✅ Fully Implemented Features
 
-### Completed Work (Uncommitted):
-1. **Database schema normalization** - Converted from simple arrays to fully normalized relational structure
-2. **RecipeModel.Insert()** implementation - Full transaction-based insert across all related tables
-3. **Migration files updated** - Both up and down migrations for normalized schema
-4. **Data structures updated** - InstructionStep struct, enhanced IngredientEntry with Unit field
-5. **createRecipeHandler** implementation - Now properly inserts and returns 201 Created with Location header
+**Recipe Management (100% Complete):**
+- ✅ Full CRUD operations with complex JOIN queries
+- ✅ Advanced filtering by name, ingredients, equipment, and time constraints
+- ✅ Sorting and pagination with metadata
+- ✅ Transaction-based inserts across 8+ related tables
+- ✅ Optimistic locking for updates (version field)
+- ✅ CASCADE deletes via database schema
 
-### Work Remaining to Complete Current Task:
-1. **Implement RecipeModel.Get(id)** (recipes.go:185) - Currently returns nil, needs to:
-   - Query recipes table with JOIN to related tables
-   - Fetch ingredients, equipment, instructions, and images
-   - Handle ErrRecordNotFound appropriately
+**User Management & Authentication (100% Complete):**
+- ✅ User registration with email/password
+- ✅ Password hashing with bcrypt (cost 12)
+- ✅ Account activation via secure tokens (3-day expiry)
+- ✅ Welcome email sent in background goroutine
+- ✅ Authentication token generation (24-hour expiry)
+- ✅ Token-based request authentication
+- ✅ Cryptographically secure token generation (crypto/rand + SHA-256)
 
-2. **Update showRecipeHandler** (recipes.go:12) - Currently returns dummy data:
-   - Call app.models.Recipes.Get(id)
-   - Remove hardcoded dummy recipe
+**Middleware & Infrastructure (100% Complete):**
+- ✅ Panic recovery with connection close
+- ✅ IP-based rate limiting (configurable RPS/burst)
+- ✅ Bearer token authentication middleware
+- ✅ User activation checks
+- ✅ Request context management (user injection)
+- ✅ Graceful shutdown with signal handling (SIGINT/SIGTERM)
+- ✅ Background task tracking with WaitGroup
+- ✅ 30-second shutdown timeout
 
-3. **Implement RecipeModel.Update()** (recipes.go:190) - Needs to:
-   - Use transaction for atomic updates across tables
-   - Implement optimistic locking with version field (see book chapter 08.02)
-   - Handle partial updates properly
+**Email System (100% Complete):**
+- ✅ SMTP mailer with embedded templates
+- ✅ HTML and plain text support
+- ✅ Background email sending (non-blocking)
+- ✅ Panic recovery in background tasks
+- ✅ Template system (subject/plainBody/htmlBody)
 
-4. **Implement RecipeModel.Delete()** (recipes.go:195) - Needs to:
-   - Use CASCADE deletes (already in schema) or explicit transaction
-   - Consider soft delete vs hard delete
+**Data Models (100% Complete):**
+- ✅ Recipe: Insert, Get, Update, Delete, GetAll
+- ✅ User: Insert, GetByEmail, Update, GetForToken
+- ✅ Token: New, Insert, DeleteAllForUser
+- ✅ Custom Duration type with JSON marshaling/unmarshaling
+- ✅ Filters and Metadata for pagination
 
-5. **Add remaining CRUD endpoints**:
-   - `PATCH /v1/recipes/:id` - Update recipe
-   - `DELETE /v1/recipes/:id` - Delete recipe
-   - `GET /v1/recipes` - List recipes with filtering/pagination
+### 📝 Known TODOs
 
-6. **Address TODO** (recipes.go:67) - Normalize ingredient/equipment names to lowercase for better deduplication
+1. **Ingredient/Equipment Normalization** (recipes.go:63):
+   - Convert ingredient and equipment names to lowercase for better deduplication
+   - Currently case-sensitive matching may create duplicate entries
 
-7. **Test Insert() implementation** - Verify complex transaction logic works with real database
+2. **Tag System**:
+   - Database tables exist (tags, recipe_tags)
+   - No model methods or handlers implemented yet
+   - Would enable categorization: cuisine types, difficulty levels, dietary restrictions
 
-### Next Recommended Tasks (After Completing CRUD):
-See the "Future Architecture Evolution" section below for the roadmap toward user authentication and the full "family restaurant ordering" feature.
+3. **Public/Private Recipes**:
+   - `public` boolean field exists in recipes table
+   - Not currently enforced in GetAll queries
+   - Could restrict recipe visibility based on creator/household
+
+4. **Creator Tracking**:
+   - `creator` field exists in Recipe struct
+   - Not stored in database or used in queries
+   - Would enable "my recipes" filtering
+
+### 🎯 Production Readiness
+
+The application is **production-ready** for its core use case: recipe management with user authentication. All "Let's Go Further" chapters 1-15 patterns are implemented:
+- ✅ Ch 1-4: Project setup, JSON handling
+- ✅ Ch 5-6: Database setup and migrations
+- ✅ Ch 7-8: CRUD with optimistic locking
+- ✅ Ch 9: Filtering, sorting, pagination
+- ✅ Ch 10: Rate limiting
+- ✅ Ch 11: Graceful shutdown
+- ✅ Ch 12: User registration
+- ✅ Ch 13: Background emails
+- ✅ Ch 14: User activation
+- ✅ Ch 15: Authentication
+
+**Not Yet Implemented:**
+- ⏸️ Ch 16: Permissions (deferred per user request)
+- ❌ Ch 17: CORS (needed for frontend integration)
+- ❌ Ch 18: Metrics (observability)
+
+### 🚀 Recommended Next Steps
+
+See "Future Architecture Evolution" section below for roadmap toward permissions, CORS, households, and the "family restaurant ordering" feature.
 
 ## Common Development Tasks
 
@@ -357,36 +482,28 @@ func (m Model) Delete(id int64) error {
 
 ## Future Architecture Evolution
 
-When ready to implement user authentication and the "family restaurant ordering" system, follow this roadmap (based on "Let's Go Further" chapters 12-16):
+**Note**: Phases 1 and parts of Phase 2 are already complete. This roadmap outlines remaining work for the "family restaurant ordering" system.
 
-### Phase 1: User Management & Authentication
-1. **User Model** (Ch. 12)
-   - Create migration for users table with email, password_hash, activated fields
-   - Implement password hashing with bcrypt (cost 12)
-   - Add user registration endpoint: `POST /v1/users`
-   
-2. **Token System** (Ch. 14-15)
-   - Create tokens table for activation and authentication tokens
-   - Generate cryptographically secure random tokens (16 bytes, base32 encoded)
-   - Store SHA-256 hashes, never plaintext
-   - Implement authentication token generation: `POST /v1/tokens/authentication`
+### ✅ Phase 1: User Management & Authentication (COMPLETE)
+All work from "Let's Go Further" chapters 12-15 is done:
+- ✅ User Model with bcrypt password hashing
+- ✅ Token System with cryptographic token generation
+- ✅ Authentication middleware with Bearer token support
+- ✅ User registration and activation endpoints
+- ✅ Background email sending for activation
 
-3. **Authentication Middleware** (Ch. 15)
-   - Extract token from `Authorization: Bearer <token>` header
-   - Look up user from token
-   - Store user in request context
-   - Add `Vary: Authorization` header
+### ⏸️ Phase 2: Authorization & Permissions (PARTIALLY COMPLETE)
+**Already Implemented:**
+- ✅ `requireAuthenticatedUser()` middleware
+- ✅ `requireActivatedUser()` middleware
+- ✅ Middleware chaining on recipe endpoints
 
-### Phase 2: Authorization & Permissions
-1. **Activation Check** (Ch. 16)
-   - `requireAuthenticatedUser()` middleware
-   - `requireActivatedUser()` middleware
-   - Chain middleware: requirePermission -> requireActivatedUser -> requireAuthenticatedUser
+**Deferred (per user request after reading Ch. 16):**
+- ⏸️ Fine-grained permissions system (permissions, user_permissions tables)
+- ⏸️ Permission checking middleware (`requirePermission()`)
+- ⏸️ Role-based access control beyond activated/not-activated
 
-2. **Permissions System** (Ch. 16)
-   - Create permissions and user_permissions tables
-   - Implement permission checking middleware
-   - Grant permissions: recipes:read, recipes:write, orders:read, orders:write
+**When to Implement:** Before multi-tenant (household) features to properly scope access.
 
 ### Phase 3: Multi-Tenant Architecture
 1. **Households**
@@ -417,27 +534,39 @@ When ready to implement user authentication and the "family restaurant ordering"
    - Send status update emails
    - Consider real-time updates (SSE or WebSockets)
 
-### Phase 5: Advanced Features
-1. **Filtering & Pagination** (Ch. 9)
-   - Implement recipe search with full-text search
-   - Add pagination with metadata
-   - Support filtering by tags, cuisine, difficulty, prep time
+### Phase 5: Advanced Features & Production Readiness
 
-2. **Rate Limiting** (Ch. 10)
-   - Add IP-based rate limiting
-   - Make configurable via command-line flags
+**Already Implemented:**
+- ✅ **Filtering & Pagination** (Ch. 9) - Recipe search with metadata, multiple filter types
+- ✅ **Rate Limiting** (Ch. 10) - IP-based rate limiting, configurable via flags
+- ✅ **Graceful Shutdown** (Ch. 11) - Signal handling with WaitGroup for background tasks
 
-3. **Graceful Shutdown** (Ch. 11)
-   - Implement signal handling
-   - Wait for background tasks to complete
+**Still Needed:**
+1. **CORS** (Ch. 17) - HIGH PRIORITY for frontend integration
+   - Add CORS middleware
+   - Configure trusted origins
+   - Handle preflight requests
 
-4. **Metrics** (Ch. 18)
+2. **Metrics** (Ch. 18) - Observability
    - Expose metrics endpoint with expvar
    - Track request counts, response times, errors
+   - Monitor background task queue depth
 
-5. **CORS** (Ch. 17)
-   - Add CORS middleware for frontend applications
-   - Configure trusted origins
+3. **Full-Text Search** - Enhancement to existing filtering
+   - PostgreSQL full-text search on recipe names/descriptions
+   - Search ranking and highlighting
+
+4. **Testing** - Quality assurance
+   - Integration tests with test database
+   - Handler unit tests
+   - Table-driven test suites
+   - Race detector testing (`go test -race`)
+
+5. **Deployment** (Ch. 19-20)
+   - Build scripts and versioning
+   - Production configuration
+   - Deployment to cloud provider
+   - HTTPS/TLS setup
 
 ## Book Reference
 

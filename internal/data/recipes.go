@@ -40,7 +40,7 @@ type Recipe struct {
 	SourceURL         string            `json:"source_url,omitempty"`         // Source of the recipe
 	PrepTime          Duration          `json:"prep_time,omitempty"`          // The wall-clock time required to make the recipe.
 	ActiveTime        Duration          `json:"active_time,omitempty"`        // The amount of time actively preparing the recipe, rather than passively waiting.
-	Creator           string            `json:"creator,omitempty"`            // User who created this recipe
+	UserID            int64             `json:"user_id"`                      // ID of the user who created this recipe
 	Public            bool              `json:"public"`                       // Whether or not this recipe should be made globally available.
 	Servings          int32             `json:"servings,omitempty"`           // Number of servings for this recipe
 	Version           int32             `json:"version"`                      // The version number starts at 1 and will be incremented each time the recipe is updated
@@ -96,12 +96,12 @@ func (r RecipeModel) Insert(recipe *Recipe) error {
 
 	query := `
 		INSERT INTO recipes
-		(name, description, instructions, notes, source_url, prep_time, active_time, servings)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		(name, description, instructions, notes, source_url, prep_time, active_time, servings, user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, created_at, version`
 
 	// Convert data.Duration to PostgreSQL interval strings for database storage
-	args := []any{recipe.Name, recipe.Description, instructionsJSON, recipe.Notes, recipe.SourceURL, durationToInterval(time.Duration(recipe.PrepTime)), durationToInterval(time.Duration(recipe.ActiveTime)), nilIfZero(recipe.Servings)}
+	args := []any{recipe.Name, recipe.Description, instructionsJSON, recipe.Notes, recipe.SourceURL, durationToInterval(time.Duration(recipe.PrepTime)), durationToInterval(time.Duration(recipe.ActiveTime)), nilIfZero(recipe.Servings), recipe.UserID}
 	err = tx.QueryRow(
 		query,
 		args...,
@@ -205,15 +205,18 @@ func (r RecipeModel) Get(id int64) (*Recipe, error) {
 	}
 
 	// Query main recipe data
+	// Extract prep_time and active_time as seconds (float) for easier scanning into Go
 	query := `
 		SELECT id, created_at, name, description, notes, source_url,
-		       prep_time, active_time, servings, version
+		       EXTRACT(EPOCH FROM prep_time) as prep_time,
+		       EXTRACT(EPOCH FROM active_time) as active_time,
+		       servings, user_id, version
 		FROM recipes
 		WHERE id = $1`
 
 	var recipe Recipe
 	var description, notes, sourceURL sql.NullString
-	var prepTime, activeTime sql.NullInt64
+	var prepTimeSeconds, activeTimeSeconds sql.NullFloat64
 	var servings sql.NullInt32
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -226,9 +229,10 @@ func (r RecipeModel) Get(id int64) (*Recipe, error) {
 		&description,
 		&notes,
 		&sourceURL,
-		&prepTime,
-		&activeTime,
+		&prepTimeSeconds,
+		&activeTimeSeconds,
 		&servings,
+		&recipe.UserID,
 		&recipe.Version,
 	)
 
@@ -251,11 +255,13 @@ func (r RecipeModel) Get(id int64) (*Recipe, error) {
 	if sourceURL.Valid {
 		recipe.SourceURL = sourceURL.String
 	}
-	if prepTime.Valid {
-		recipe.PrepTime = Duration(prepTime.Int64)
+	if prepTimeSeconds.Valid {
+		// Convert seconds (float64) to Duration (nanoseconds)
+		recipe.PrepTime = Duration(time.Duration(prepTimeSeconds.Float64 * float64(time.Second)))
 	}
-	if activeTime.Valid {
-		recipe.ActiveTime = Duration(activeTime.Int64)
+	if activeTimeSeconds.Valid {
+		// Convert seconds (float64) to Duration (nanoseconds)
+		recipe.ActiveTime = Duration(time.Duration(activeTimeSeconds.Float64 * float64(time.Second)))
 	}
 	if servings.Valid {
 		recipe.Servings = servings.Int32
@@ -671,7 +677,7 @@ func (r RecipeModel) GetAll(name string, ingredients []string, equipment []strin
 		       fr.id, fr.name, fr.description,
 		       EXTRACT(EPOCH FROM fr.prep_time) as prep_time,
 		       EXTRACT(EPOCH FROM fr.active_time) as active_time,
-		       fr.servings, fr.created_at, fr.version,
+		       fr.servings, fr.created_at, fr.user_id, fr.version,
 		       ri.image_url as display_url
 		FROM filtered_recipes fr
 		LEFT JOIN recipe_images ri ON fr.id = ri.recipe_id AND ri.image_type = 'main'
@@ -731,6 +737,7 @@ func (r RecipeModel) GetAll(name string, ingredients []string, equipment []strin
 			&activeTimeSeconds,
 			&servings,
 			&recipe.CreatedAt,
+			&recipe.UserID,
 			&recipe.Version,
 			&displayURL,
 		)

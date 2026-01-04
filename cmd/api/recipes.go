@@ -60,6 +60,9 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Get the authenticated user from the request context
+	user := app.contextGetUser(r)
+
 	// TODO: convert all strings to lower-case where appropriate.
 	recipe := &data.Recipe{
 		Name:              input.Name,
@@ -73,6 +76,7 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 		ActiveTime:        input.ActiveTime,
 		Public:            input.Public,
 		Servings:          input.Servings,
+		UserID:            user.ID,
 	}
 
 	// Validate data received.

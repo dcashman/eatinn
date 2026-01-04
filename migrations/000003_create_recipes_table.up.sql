@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS recipes (
-    id bigserial PRIMARY KEY,  
+    id bigserial PRIMARY KEY,
     created_at timestamp(0) with time zone NOT NULL DEFAULT NOW(),
     name text NOT NULL,
     description text,
@@ -9,8 +9,11 @@ CREATE TABLE IF NOT EXISTS recipes (
     prep_time interval,
     active_time interval,
     servings integer,
+    user_id bigint NOT NULL REFERENCES users ON DELETE CASCADE,
     version integer NOT NULL DEFAULT 1
 );
+
+CREATE INDEX idx_recipes_user_id ON recipes(user_id);
 
 CREATE TABLE IF NOT EXISTS ingredients (
     id bigserial PRIMARY KEY,  

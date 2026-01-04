@@ -8,4 +8,5 @@ DROP TABLE IF EXISTS recipe_equipment;
 DROP TABLE IF EXISTS recipe_ingredients;
 DROP TABLE IF EXISTS equipment;
 DROP TABLE IF EXISTS ingredients;
+DROP INDEX IF EXISTS idx_recipes_user_id;
 DROP TABLE IF EXISTS recipes;
