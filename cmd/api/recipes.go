@@ -129,6 +129,13 @@ func (app *application) updateRecipeHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Check if the authenticated user owns this recipe
+	user := app.contextGetUser(r)
+	if recipe.UserID != user.ID {
+		app.notPermittedResponse(w, r)
+		return
+	}
+
 	// Parse the request body
 	var input struct {
 		Name              *string                `json:"name"`
@@ -218,6 +225,26 @@ func (app *application) deleteRecipeHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Fetch the recipe to check ownership
+	recipe, err := app.models.Recipes.Get(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, data.ErrRecordNotFound):
+			app.notFoundResponse(w, r)
+		default:
+			app.serverErrorResponse(w, r, err)
+		}
+		return
+	}
+
+	// Check if the authenticated user owns this recipe
+	user := app.contextGetUser(r)
+	if recipe.UserID != user.ID {
+		app.notPermittedResponse(w, r)
+		return
+	}
+
+	// Delete the recipe
 	err = app.models.Recipes.Delete(id)
 	if err != nil {
 		switch {
