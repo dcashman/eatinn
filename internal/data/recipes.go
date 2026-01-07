@@ -624,7 +624,7 @@ func (r RecipeModel) GetAll(name string, ingredients []string, equipment []strin
 	query := `
 		WITH filtered_recipes AS (
 			SELECT DISTINCT r.id, r.name, r.description, r.prep_time, r.active_time,
-			       r.servings, r.created_at, r.version
+			       r.servings, r.user_id, r.created_at, r.version
 			FROM recipes r
 			WHERE ($1 = '' OR r.name ILIKE '%' || $1 || '%')
 			  AND ($2::double precision = 0 OR EXTRACT(EPOCH FROM r.prep_time) <= $2::double precision / 1000000000.0)

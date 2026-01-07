@@ -42,6 +42,7 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 	// of the Recipe struct. This struct will be our *target decode destination*.
 	var input struct {
 		Name              string                 `json:"name"`
+		Description       string                 `json:"description"`
 		Ingredients       []data.IngredientEntry `json:"ingredients"`
 		RequiredEquipment []string               `json:"required_equipment"`
 		Instructions      []data.InstructionStep `json:"instructions"`
@@ -66,6 +67,7 @@ func (app *application) createRecipeHandler(w http.ResponseWriter, r *http.Reque
 	// TODO: convert all strings to lower-case where appropriate.
 	recipe := &data.Recipe{
 		Name:              input.Name,
+		Description:       input.Description,
 		Ingredients:       input.Ingredients,
 		RequiredEquipment: input.RequiredEquipment,
 		Instructions:      input.Instructions,
